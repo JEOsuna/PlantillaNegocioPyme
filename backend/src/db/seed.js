@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
-import { db } from './index.js';
+import pool from './index.js';
 
 const products = [
   ['control-financiero', 'Control Financiero PYME', 49900, 'plantillas/control-financiero.xlsx'],
@@ -11,18 +11,28 @@ const products = [
   ['bundle',             'Paquete Completo',         159500, 'plantillas/bundle.zip'],
 ];
 
-for (const [slug, name, price, key] of products) {
-  await db.query(
-    `INSERT INTO products (slug, name, price_mxn_cents, r2_object_key)
-     VALUES ($1,$2,$3,$4) ON CONFLICT (slug) DO NOTHING`,
-    [slug, name, price, key]
-  );
+async function seed() {
+  try {
+    for (const [slug, name, price, key] of products) {
+      await pool.query(
+        `INSERT INTO products (slug, name, price_mxn_cents, r2_object_key)
+         VALUES ($1,$2,$3,$4) ON CONFLICT (slug) DO NOTHING`,
+        [slug, name, price, key]
+      );
+    }
+
+    const pw = await bcrypt.hash('admin123-change-me', 12);
+    await pool.query(
+      `INSERT INTO users (email, password_hash, name, role, email_verified_at)
+       VALUES ($1,$2,$3,'admin',now()) ON CONFLICT (email) DO NOTHING`,
+      ['[email protected]', pw, 'Admin']
+    );
+    console.log('✓ Products and admin user seeded');
+  } catch (err) {
+    console.error('Seed error:', err);
+  } finally {
+    await pool.end();
+  }
 }
 
-const pw = await bcrypt.hash('admin123-change-me', 12);
-await db.query(
-  `INSERT INTO users (email, password_hash, name, role, email_verified_at)
-   VALUES ($1,$2,$3,'admin',now()) ON CONFLICT (email) DO NOTHING`,
-  ['[email protected]', pw, 'Admin']
-);
-console.log('✓ seeded'); await db.end();
+seed();
