@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { userQ } from '../db/index.js';
+import { qs } from '../db/index.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const r = Router();
@@ -7,7 +7,7 @@ const r = Router();
 r.get('/', requireAuth, async (req, res, next) => {
   try {
     // userQ sets app.current_user_id → RLS enforces user sees only their orders
-    const { rows } = await userQ(req.user.sub, req.user.role,
+    const { rows } = await qs(req.user.sub,
       `SELECT o.id, o.total_mxn_cents, o.status, o.paid_at, o.created_at,
               json_agg(json_build_object('name', p.name, 'qty', oi.quantity)) AS items
        FROM orders o
