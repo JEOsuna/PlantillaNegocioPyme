@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { q, assertUUID } from '../db/index.js';
+import { q, qs, assertUUID } from '../db/index.js';
+import pool from '../db/index.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const r = Router();
@@ -45,22 +46,36 @@ r.post('/', requireAuth, async (req, res, next) => {
     const line  = items.map(i => ({ ...byId.get(i.product_id), quantity: i.quantity }));
     const total = line.reduce((a, l) => a + l.price_mxn_cents * l.quantity, 0);
 
-    // Create pending order
-    const { rows: [order] } = await q(
-      `INSERT INTO orders (user_id, total_mxn_cents, gateway, status)
-       VALUES ($1, $2, $3, 'pending') RETURNING id`,
-      [req.user.sub, total, gateway]
-    );
-    for (const l of line) {
-      await q(
-        `INSERT INTO order_items (order_id, product_id, unit_price_cents, quantity)
-         VALUES ($1, $2, $3, $4)`,
-        [order.id, l.id, l.price_mxn_cents, l.quantity]
+    // Create pending order — usar transacción con contexto RLS
+    const client = await pool.connect();
+    let order;
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.current_user_id', $1, true)`, [req.user.sub]);
+      const { rows: [o] } = await client.query(
+        `INSERT INTO orders (user_id, total_mxn_cents, gateway, status)
+         VALUES ($1, $2, $3, 'pending') RETURNING id`,
+        [req.user.sub, total, gateway]
       );
+      order = o;
+      for (const l of line) {
+        await client.query(
+          `INSERT INTO order_items (order_id, product_id, unit_price_cents, quantity)
+           VALUES ($1, $2, $3, $4)`,
+          [order.id, l.id, l.price_mxn_cents, l.quantity]
+        );
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
 
-    const success = `${process.env.APP_URL}/thanks?order=${order.id}`;
-    const cancel  = `${process.env.APP_URL}/checkout?cancelled=1`;
+    const APP_BASE = (process.env.APP_URL || '').split(',')[0].trim().replace(/\/$/, '');
+    const success = `${APP_BASE}/thanks?order=${order.id}`;
+    const cancel  = `${APP_BASE}/checkout?cancelled=1`;
 
     if (gateway === 'stripe') {
       const { default: Stripe } = await import('stripe');
@@ -81,7 +96,7 @@ r.post('/', requireAuth, async (req, res, next) => {
         cancel_url:     cancel,
         metadata:       { order_id: order.id, user_id: req.user.sub },
       });
-      await q(`UPDATE orders SET gateway_id = $1 WHERE id = $2`, [session.id, order.id]);
+      await qs(req.user.sub, `UPDATE orders SET gateway_id = $1 WHERE id = $2`, [session.id, order.id]);
       return res.json({ url: session.url });
     }
 
@@ -101,7 +116,7 @@ r.post('/', requireAuth, async (req, res, next) => {
         notification_url:   `${process.env.API_URL}/webhooks/mercadopago`,
       },
     });
-    await q(`UPDATE orders SET gateway_id = $1 WHERE id = $2`, [pref.id, order.id]);
+    await qs(req.user.sub, `UPDATE orders SET gateway_id = $1 WHERE id = $2`, [pref.id, order.id]);
     res.json({ url: pref.init_point });
   } catch (e) { next(e); }
 });
