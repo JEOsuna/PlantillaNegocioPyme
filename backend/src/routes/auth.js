@@ -11,6 +11,9 @@ import bcrypt from 'bcryptjs';
 
 const r = Router();
 
+// Siempre usar solo la primera URL de APP_URL (puede ser lista separada por comas para CORS)
+const APP_BASE = (process.env.APP_URL || '').split(',')[0].trim().replace(/\/$/, '');
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60_000, max: 10, standardHeaders: 'draft-7', legacyHeaders: false,
   keyGenerator: req => req.ip,
@@ -48,7 +51,7 @@ r.post('/register', authLimiter, async (req, res, next) => {
       [u.id, tokenHash]
     );
     sendVerification(u.email, u.name,
-      `${process.env.APP_URL}/verify-email?token=${rawToken}`
+      `${APP_BASE}/verify-email?token=${rawToken}`
     ).catch(() => {});
 
     // Issue token pair — user can browse but checkout blocked until verified
@@ -231,7 +234,7 @@ r.post('/resend-verification', authLimiter, async (req, res, next) => {
       const raw  = crypto.randomBytes(32).toString('hex');
       const hash = crypto.createHash('sha256').update(raw).digest('hex');
       await q(`INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES ($1,$2, now() + interval '24 hours')`, [rows[0].id, hash]);
-      sendVerification(email, rows[0].name, `${process.env.APP_URL}/verify-email?token=${raw}`).catch(() => {});
+      sendVerification(email, rows[0].name, `${APP_BASE}/verify-email?token=${raw}`).catch(() => {});
     }
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -247,7 +250,7 @@ r.post('/forgot', authLimiter, async (req, res, next) => {
       const raw  = crypto.randomBytes(32).toString('hex');
       const hash = crypto.createHash('sha256').update(raw).digest('hex');
       await q(`INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES ($1,$2, now() + interval '1 hour')`, [rows[0].id, hash]);
-      sendReset(email, `${process.env.APP_URL}/reset?token=${raw}`).catch(() => {});
+      sendReset(email, `${APP_BASE}/reset?token=${raw}`).catch(() => {});
     }
     res.json({ ok: true });
   } catch (e) { next(e); }
